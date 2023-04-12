@@ -1,0 +1,16 @@
+In order to load files that have utf-8 characters in the name or path, you need to change the function `open-mp3-file` in the mixalot package. I'm doing this manually in built releases, but I might wanna make a pull request soon...
+
+Specifically, you need to change this part in the file called mp3-stream.lisp:
+
+```lisp
+(defun open-mp3-file (...)
+ ...
+ (let ...
+	...
+	(with-foreign-string (name filename :encoding :iso-8859-1)
+             (check-mh-error "Open mp3 file" uhandle (mpg123-open uhandle name)))
+	...
+	))
+```
+
+Change :iso-8859-1 to :utf-8 and you're done.
