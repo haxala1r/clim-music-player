@@ -8,4 +8,5 @@
    :clim :clim-lisp
    :mixalot :mixalot-mp3)
   (:export
+   get-mp3s-under
    run-app))

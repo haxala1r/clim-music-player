@@ -37,17 +37,30 @@
 		     :year (or (getf tags :year) "-")))))
 
 
-(defun print-track (track stream)
+(defun format-track (track stream)
   (format stream "'~a' by '~a' in '~a'" (title track) (artist track) (album track)))
+
+(defun format-pathname (name stream)
+  "Prints the pathname's name and type only, to make things a little more human-readable."
+  (if (directory-form-p name)
+      (format stream "~a/" (first (last (pathname-directory name))))
+      (if (pathname-type name)
+	  (format stream "~a.~a" (pathname-name name) (pathname-type name))
+	  (format stream "~a" (pathname-name name)))))
 
 (define-presentation-type track-presentation ()
   :inherit-from 'track)
 
-(defun app-display (frame pane)
-  (loop for i in (track-list frame)
-	do (with-output-as-presentation (pane i 'track-presentation)
-	     (print-track i pane)
-	     (terpri pane))))
+(define-presentation-type pathname-presentation ()
+  :inherit-from 'pathname)
+
+(defclass directory-view (view)
+  ((current-dir :initform (uiop/os:getcwd)
+		:initarg :current-dir
+		:accessor current-dir)))
+
+(defclass track-view (view)
+  ())
 
 (define-application-frame app-frame ()
   ((track-list
@@ -56,55 +69,71 @@
     :accessor track-list)
    (mixer
     :initarg :mixer
-    :reader mixer))
+    :reader mixer)
+   (dirview
+    :initform (make-instance 'directory-view)
+    :accessor dirview))
   (:pointer-documentation t)
+  (:menu-bar t)
   (:panes
    (app :application :display-function 'app-display
-	:height 400 :width 400)
-   (int :interactor :height 200 :width 400))
+		     :height 400 :width 400 :default-view (make-instance 'track-view))
+   (int :interactor :height 200 :width 400)
+   )
   (:layouts
    (default (vertically ()
 	      app int))))
 
-(define-app-frame-command (com-add-track :name t) ((file-path 'string))
-  (let ((track (make-track file-path)))
+(defgeneric app-display-with-view (frame pane view))
+
+(defun app-display (frame pane)
+  (app-display-with-view frame pane (stream-default-view pane)))
+
+(defmethod app-display-with-view (frame pane (view track-view))
+  (loop for i in (track-list frame)
+	do (with-output-as-presentation (pane i 'track-presentation)
+	     (print-track i pane)
+	     (terpri pane))))
+
+(defmethod app-display-with-view (frame pane (view directory-view))
+  (loop for i in (append
+		  (list
+		   (uiop:truename* (merge-pathnames #p"../" (current-dir view)))
+		   (current-dir view))
+		  (directory (make-pathname :defaults (current-dir view)
+					    :name :wild
+					    :type :wild)))
+	do (with-output-as-presentation (pane i 'pathname-presentation)
+	     (princ i pane)
+	     (terpri pane))))
+
+(define-app-frame-command (com-directory-view :name t :menu t) ()
+  (setf (stream-default-view *standard-output*)
+	(dirview *application-frame*)))
+
+(define-app-frame-command (com-track-view :name t :menu t) ()
+  (setf (stream-default-view *standard-output*)
+	(make-instance 'track-view)))
+
+(define-app-frame-command (com-change-directory :name t) ((path 'pathname-presentation))
+  (setf (current-dir (dirview *application-frame*)) path))
+
+(define-app-frame-command (com-add-track :name t) ((file-path 'pathname-presentation))
+  (let ((track (make-track (namestring file-path))))
     (if track
 	(push track (track-list *application-frame*)))))
 
 (define-app-frame-command (com-play-track :name t) ((track 'track-presentation))
   (mixer-add-streamer (mixer *application-frame*) (make-mp3-streamer (file-path track))))
 
-(defun directory-form-p (path)
-  (and path
-       (not (pathname-name path))
-       (not (pathname-type path))))
-
-(defun to-directory-form (path)
-  "Turn a pathname to directory form. (for cross-implementation compatability)"
-  (let ((path (pathname path)))
-    (if (or
-	 (eql (pathname-name path) :wild)
-	 (eql (pathname-type path) :wild))
-	(error "Cannot convert wild paths"))
-    (if (directory-form-p path)
-	path
-	(make-pathname :directory (append (or (pathname-directory path) (list :relative))
-					  (list (pathname-name path)))
-		       :name nil
-		       :type nil
-		       :defaults path))))
-
-(defun get-mp3s-under (dir)
-  (let ((dir (to-directory-form dir)))
-    (directory (make-pathname :defaults dir
-			      :name :wild
-			      :type "mp3"))))
-
-(define-app-frame-command (com-add-directory :name t) ((dir-path 'string))
+(define-app-frame-command (com-add-directory :name t) ((dir-path 'pathname-presentation))
   "Adds every mp3 file under a given directory (non-recursively)"
   (loop for i in (get-mp3s-under dir-path)
 	for track = (make-track i)
 	if track do (push track (track-list *application-frame*))))
+
+(define-app-frame-command (com-stop-all :name t) ()
+  (mixer-remove-all-streamers (mixer *application-frame*)))
 
 (defvar *main-mixer* nil)
 (defun run-app ()
